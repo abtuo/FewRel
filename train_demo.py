@@ -24,7 +24,7 @@ def main():
             help='train file')
     parser.add_argument('--val', default='val_wiki',
             help='val file')
-    parser.add_argument('--test', default='test_wiki',
+    parser.add_argument('--test', default='val_wiki',
             help='test file')
     parser.add_argument('--adv', default=None,
             help='adv file')
