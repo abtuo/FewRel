@@ -12,6 +12,7 @@ class FewRelDataset(data.Dataset):
     def __init__(self, name, encoder, N, K, Q, na_rate, root):
         self.root = root
         path = os.path.join(root, name + ".json")
+        print(path)
         if not os.path.exists(path):
             print("[ERROR] Data file does not exist!")
             assert(0)
