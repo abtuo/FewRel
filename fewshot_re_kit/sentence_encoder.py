@@ -6,19 +6,36 @@ import numpy as np
 import os
 from torch import optim
 from . import network
-from transformers import BertTokenizer, BertModel, BertForMaskedLM, BertForSequenceClassification, RobertaModel, RobertaTokenizer, RobertaForSequenceClassification
+from transformers import (
+    BertTokenizer,
+    BertModel,
+    BertForMaskedLM,
+    BertForSequenceClassification,
+    RobertaModel,
+    RobertaTokenizer,
+    RobertaForSequenceClassification,
+)
+
 
 class CNNSentenceEncoder(nn.Module):
-
-    def __init__(self, word_vec_mat, word2id, max_length, word_embedding_dim=50, 
-            pos_embedding_dim=5, hidden_size=230):
+    def __init__(
+        self,
+        word_vec_mat,
+        word2id,
+        max_length,
+        word_embedding_dim=50,
+        pos_embedding_dim=5,
+        hidden_size=230,
+    ):
         nn.Module.__init__(self)
         self.hidden_size = hidden_size
         self.max_length = max_length
-        self.embedding = network.embedding.Embedding(word_vec_mat, max_length, 
-                word_embedding_dim, pos_embedding_dim)
-        self.encoder = network.encoder.Encoder(max_length, word_embedding_dim, 
-                pos_embedding_dim, hidden_size)
+        self.embedding = network.embedding.Embedding(
+            word_vec_mat, max_length, word_embedding_dim, pos_embedding_dim
+        )
+        self.encoder = network.encoder.Encoder(
+            max_length, word_embedding_dim, pos_embedding_dim, hidden_size
+        )
         self.word2id = word2id
 
     def forward(self, inputs):
@@ -34,12 +51,12 @@ class CNNSentenceEncoder(nn.Module):
             if token in self.word2id:
                 indexed_tokens.append(self.word2id[token])
             else:
-                indexed_tokens.append(self.word2id['[UNK]'])
-        
+                indexed_tokens.append(self.word2id["[UNK]"])
+
         # padding
         while len(indexed_tokens) < self.max_length:
-            indexed_tokens.append(self.word2id['[PAD]'])
-        indexed_tokens = indexed_tokens[:self.max_length]
+            indexed_tokens.append(self.word2id["[PAD]"])
+        indexed_tokens = indexed_tokens[: self.max_length]
 
         # pos
         pos1 = np.zeros((self.max_length), dtype=np.int32)
@@ -52,62 +69,62 @@ class CNNSentenceEncoder(nn.Module):
 
         # mask
         mask = np.zeros((self.max_length), dtype=np.int32)
-        mask[:len(indexed_tokens)] = 1
+        mask[: len(indexed_tokens)] = 1
 
         return indexed_tokens, pos1, pos2, mask
 
 
 class BERTSentenceEncoder(nn.Module):
-
-    def __init__(self, pretrain_path, max_length, cat_entity_rep=False, mask_entity=False): 
+    def __init__(
+        self, pretrain_path, max_length, cat_entity_rep=False, mask_entity=False
+    ):
         nn.Module.__init__(self)
         self.bert = BertModel.from_pretrained(pretrain_path)
         self.max_length = max_length
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.tokenizer = BertTokenizer.from_pretrained(pretrain_path)
         self.cat_entity_rep = cat_entity_rep
         self.mask_entity = mask_entity
 
     def forward(self, inputs):
-        if not self.cat_entity_rep:
-            _, x = self.bert(inputs['word'], attention_mask=inputs['mask'])
-            return x
-        else:
-            outputs = self.bert(inputs['word'], attention_mask=inputs['mask'])
-            tensor_range = torch.arange(inputs['word'].size()[0])
-            h_state = outputs[0][tensor_range, inputs["pos1"]]
-            t_state = outputs[0][tensor_range, inputs["pos2"]]
-            state = torch.cat((h_state, t_state), -1)
-            return state
-    
+        outputs = self.bert(inputs["word"], attention_mask=inputs["mask"])
+        tensor_range = torch.arange(inputs["word"].size()[0])
+        h_state = outputs[0][tensor_range, inputs["pos1"]]
+        t_state = outputs[0][tensor_range, inputs["pos2"]]
+        state = torch.cat((h_state, t_state), -1)
+        return state
+
     def tokenize(self, raw_tokens, pos_head, pos_tail):
         # token -> index
-        tokens = ['[CLS]']
+        tokens = ["[CLS]"]
         cur_pos = 0
         pos1_in_index = 1
         pos2_in_index = 1
         for token in raw_tokens:
             token = token.lower()
             if cur_pos == pos_head[0]:
-                tokens.append('[unused0]')
+                tokens.append("[unused0]")
                 pos1_in_index = len(tokens)
             if cur_pos == pos_tail[0]:
-                tokens.append('[unused1]')
+                tokens.append("[unused1]")
                 pos2_in_index = len(tokens)
-            if self.mask_entity and ((pos_head[0] <= cur_pos and cur_pos <= pos_head[-1]) or (pos_tail[0] <= cur_pos and cur_pos <= pos_tail[-1])):
-                tokens += ['[unused4]']
+            if self.mask_entity and (
+                (pos_head[0] <= cur_pos and cur_pos <= pos_head[-1])
+                or (pos_tail[0] <= cur_pos and cur_pos <= pos_tail[-1])
+            ):
+                tokens += ["[unused4]"]
             else:
                 tokens += self.tokenizer.tokenize(token)
             if cur_pos == pos_head[-1]:
-                tokens.append('[unused2]')
+                tokens.append("[unused2]")
             if cur_pos == pos_tail[-1]:
-                tokens.append('[unused3]')
+                tokens.append("[unused3]")
             cur_pos += 1
         indexed_tokens = self.tokenizer.convert_tokens_to_ids(tokens)
-        
+
         # padding
         while len(indexed_tokens) < self.max_length:
             indexed_tokens.append(0)
-        indexed_tokens = indexed_tokens[:self.max_length]
+        indexed_tokens = indexed_tokens[: self.max_length]
 
         # pos
         pos1 = np.zeros((self.max_length), dtype=np.int32)
@@ -118,27 +135,127 @@ class BERTSentenceEncoder(nn.Module):
 
         # mask
         mask = np.zeros((self.max_length), dtype=np.int32)
-        mask[:len(tokens)] = 1
+        mask[: len(tokens)] = 1
 
         pos1_in_index = min(self.max_length, pos1_in_index)
         pos2_in_index = min(self.max_length, pos2_in_index)
 
         return indexed_tokens, pos1_in_index - 1, pos2_in_index - 1, mask
 
-class BERTPAIRSentenceEncoder(nn.Module):
 
-    def __init__(self, pretrain_path, max_length): 
+class BERTWeighted(BERTSentenceEncoder):
+    def __init__(self, bert_path, max_length):
+        super(BERTWeighted, self).__init__(bert_path, max_length)
+
+        self.tokenizer = BertTokenizer.from_pretrained(bert_path)
+        self.bert = BertModel.from_pretrained(bert_path)
+
+        self.max_length = max_length
+
+        # number of layers
+        self.num_layers = self.bert.config.num_hidden_layers
+
+        # feature size
+        self.feature_size = self.bert.config.hidden_size
+
+        self.aggregation_layer = nn.Conv1d(
+            in_channels=self.num_layers, out_channels=1, kernel_size=1
+        )
+
+    def forward(self, inputs, **bert_args):
+        output = self.bert(
+            inputs["word"],
+            attention_mask=inputs["mask"],
+            output_hidden_states=True,
+            **bert_args
+        )
+
+        hidden_states = output.hidden_states
+
+        hidden_states = torch.stack(hidden_states[1:], dim=-2)
+
+        batch_size, max_len, _, _ = hidden_states.shape
+
+        hidden_states = hidden_states.view(-1, self.num_layers, self.feature_size)
+
+        output = self.aggregation_layer(hidden_states)
+
+        outputs = output.view(batch_size, max_len, -1)
+
+        tensor_range = torch.arange(inputs["word"].size()[0])
+        h_state = outputs[tensor_range, inputs["pos1"]]
+        t_state = outputs[tensor_range, inputs["pos2"]]
+        state = torch.cat((h_state, t_state), -1)
+        return state
+
+
+class BERTWeightedATT(BERTSentenceEncoder):
+    def __init__(self, bert_path, max_length):
+        super(BERTWeightedATT, self).__init__(bert_path, max_length)
+
+        self.tokenizer = BertTokenizer.from_pretrained(bert_path)
+        self.bert = BertModel.from_pretrained(bert_path)
+
+        self.max_length = max_length
+
+        # number of layers
+        self.num_layers = self.bert.config.num_hidden_layers
+
+        # feature size
+        self.feature_size = self.bert.config.hidden_size
+
+        # weighted sum
+        self.aggregation_layer = nn.Linear(self.feature_size, 1)
+
+    def forward(self, inputs, **bert_args):
+        output = self.bert(
+            inputs["word"],
+            attention_mask=inputs["mask"],
+            output_hidden_states=True,
+            **bert_args
+        )
+
+        hidden_states = output.hidden_states
+
+        hidden_states = torch.stack(hidden_states[1:], dim=-2)
+
+        batch_size, max_len, _, _ = hidden_states.shape
+
+        hidden_states = hidden_states.view(
+            -1, self.num_layers, self.feature_size
+        )  # **, nb_layers, 768
+
+        self.weights = F.softmax(self.aggregation_layer(hidden_states), dim=-2)
+
+        output = torch.bmm(self.weights.transpose(1, 2), hidden_states)
+
+        outputs = output.view(batch_size, max_len, -1)
+
+        tensor_range = torch.arange(inputs["word"].size()[0])
+
+        h_state = outputs[tensor_range, inputs["pos1"]]
+        t_state = outputs[tensor_range, inputs["pos2"]]
+
+        state = torch.cat((h_state, t_state), -1)
+
+        return state
+
+
+class BERTPAIRSentenceEncoder(nn.Module):
+    def __init__(self, pretrain_path, max_length):
         nn.Module.__init__(self)
         self.bert = BertForSequenceClassification.from_pretrained(
-                pretrain_path,
-                num_labels=2)
+            pretrain_path, num_labels=2
+        )
         self.max_length = max_length
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 
     def forward(self, inputs):
-        x = self.bert(inputs['word'], token_type_ids=inputs['seg'], attention_mask=inputs['mask'])[0]
+        x = self.bert(
+            inputs["word"], token_type_ids=inputs["seg"], attention_mask=inputs["mask"]
+        )[0]
         return x
-    
+
     def tokenize(self, raw_tokens, pos_head, pos_tail):
         # token -> index
         # tokens = ['[CLS]']
@@ -149,43 +266,42 @@ class BERTPAIRSentenceEncoder(nn.Module):
         for token in raw_tokens:
             token = token.lower()
             if cur_pos == pos_head[0]:
-                tokens.append('[unused0]')
+                tokens.append("[unused0]")
                 pos1_in_index = len(tokens)
             if cur_pos == pos_tail[0]:
-                tokens.append('[unused1]')
+                tokens.append("[unused1]")
                 pos2_in_index = len(tokens)
             tokens += self.tokenizer.tokenize(token)
             if cur_pos == pos_head[-1]:
-                tokens.append('[unused2]')
+                tokens.append("[unused2]")
             if cur_pos == pos_tail[-1]:
-                tokens.append('[unused3]')
+                tokens.append("[unused3]")
             cur_pos += 1
         indexed_tokens = self.tokenizer.convert_tokens_to_ids(tokens)
-        
+
         return indexed_tokens
 
-class RobertaSentenceEncoder(nn.Module):
 
-    def __init__(self, pretrain_path, max_length, cat_entity_rep=False): 
+class RobertaSentenceEncoder(nn.Module):
+    def __init__(self, pretrain_path, max_length, cat_entity_rep=False):
         nn.Module.__init__(self)
         self.roberta = RobertaModel.from_pretrained(pretrain_path)
         self.max_length = max_length
-        self.tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+        self.tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
         self.cat_entity_rep = cat_entity_rep
 
     def forward(self, inputs):
         if not self.cat_entity_rep:
-            _, x = self.roberta(inputs['word'], attention_mask=inputs['mask'])
+            _, x = self.roberta(inputs["word"], attention_mask=inputs["mask"])
             return x
         else:
-            outputs = self.roberta(inputs['word'], attention_mask=inputs['mask'])
-            tensor_range = torch.arange(inputs['word'].size()[0])
+            outputs = self.roberta(inputs["word"], attention_mask=inputs["mask"])
+            tensor_range = torch.arange(inputs["word"].size()[0])
             h_state = outputs[0][tensor_range, inputs["pos1"]]
             t_state = outputs[0][tensor_range, inputs["pos2"]]
             state = torch.cat((h_state, t_state), -1)
             return state
 
-    
     def tokenize(self, raw_tokens, pos_head, pos_tail):
         def getIns(bped, bpeTokens, tokens, L):
             resL = 0
@@ -214,10 +330,10 @@ class RobertaSentenceEncoder(nn.Module):
         tiL = getIns(" ".join(sst), sst, raw_tokens, tailL)
         tiR = getIns(" ".join(sst), sst, raw_tokens, tailR)
 
-        E1b = 'madeupword0000'
-        E1e = 'madeupword0001'
-        E2b = 'madeupword0002'
-        E2e = 'madeupword0003'
+        E1b = "madeupword0000"
+        E1e = "madeupword0001"
+        E2b = "madeupword0002"
+        E2e = "madeupword0003"
         ins = [(hiL, E1b), (hiR, E1e), (tiL, E2b), (tiR, E2e)]
         ins = sorted(ins)
         pE1 = 0
@@ -236,13 +352,13 @@ class RobertaSentenceEncoder(nn.Module):
                 pE2_ = ins[i][0] + i
         pos1_in_index = pE1 + 1
         pos2_in_index = pE2 + 1
-        sst = ['<s>'] + sst
+        sst = ["<s>"] + sst
         indexed_tokens = self.tokenizer.convert_tokens_to_ids(sst)
 
         # padding
         while len(indexed_tokens) < self.max_length:
             indexed_tokens.append(1)
-        indexed_tokens = indexed_tokens[:self.max_length]
+        indexed_tokens = indexed_tokens[: self.max_length]
 
         # pos
         pos1 = np.zeros((self.max_length), dtype=np.int32)
@@ -253,7 +369,7 @@ class RobertaSentenceEncoder(nn.Module):
 
         # mask
         mask = np.zeros((self.max_length), dtype=np.int32)
-        mask[:len(sst)] = 1
+        mask[: len(sst)] = 1
 
         pos1_in_index = min(self.max_length, pos1_in_index)
         pos2_in_index = min(self.max_length, pos2_in_index)
@@ -262,19 +378,18 @@ class RobertaSentenceEncoder(nn.Module):
 
 
 class RobertaPAIRSentenceEncoder(nn.Module):
-
-    def __init__(self, pretrain_path, max_length): 
+    def __init__(self, pretrain_path, max_length):
         nn.Module.__init__(self)
         self.roberta = RobertaForSequenceClassification.from_pretrained(
-                pretrain_path,
-                num_labels=2)
+            pretrain_path, num_labels=2
+        )
         self.max_length = max_length
-        self.tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+        self.tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 
     def forward(self, inputs):
-        x = self.roberta(inputs['word'], attention_mask=inputs['mask'])[0]
+        x = self.roberta(inputs["word"], attention_mask=inputs["mask"])[0]
         return x
-    
+
     def tokenize(self, raw_tokens, pos_head, pos_tail):
         def getIns(bped, bpeTokens, tokens, L):
             resL = 0
@@ -303,13 +418,13 @@ class RobertaPAIRSentenceEncoder(nn.Module):
         tiL = getIns(" ".join(sst), sst, raw_tokens, tailL)
         tiR = getIns(" ".join(sst), sst, raw_tokens, tailR)
 
-        E1b = 'madeupword0000'
-        E1e = 'madeupword0001'
-        E2b = 'madeupword0002'
-        E2e = 'madeupword0003'
+        E1b = "madeupword0000"
+        E1e = "madeupword0001"
+        E2b = "madeupword0002"
+        E2e = "madeupword0003"
         ins = [(hiL, E1b), (hiR, E1e), (tiL, E2b), (tiR, E2e)]
         ins = sorted(ins)
         for i in range(0, 4):
             sst.insert(ins[i][0] + i, ins[i][1])
         indexed_tokens = self.tokenizer.convert_tokens_to_ids(sst)
-        return indexed_tokens 
+        return indexed_tokens
